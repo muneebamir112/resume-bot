@@ -1,0 +1,34 @@
+{
+    "name": "Jimmy Tran",
+    "email": "jimmytran075@outlook.com",
+    "phone": "+1 469 555 3890",
+    "address": "Haltom City, TX",
+    "experience_summary": "8+ Years",
+    "FIXED_EXPERIENCE": [
+        {
+            "company": "Seek AI",
+            "location": "New York, NY (Remote)",
+            "dates": "Nov 2023 – Feb 2026",
+            "seniority": "current, most recent — staff/senior level, must most heavily reflect the JD's responsibilities",
+            "bullet_count": 9
+        },
+        {
+            "company": "Medallion Bank",
+            "location": "Murray, UT (Onsite)",
+            "dates": "May 2019 – Aug 2023",
+            "seniority": "senior level",
+            "bullet_count": 7
+        },
+        {
+            "company": "Nomi Health",
+            "location": "Orem, UT (Onsite)",
+            "dates": "Sep 2018 – Mar 2019",
+            "seniority": "intern level",
+            "bullet_count": 5
+        }
+    ],
+    "FIXED_EDUCATION": {
+        "school": "Weber State University",
+        "degree_line": "Bachelor’s Degree, Computer Science, Apr 2014 – Sep 2018"
+    }
+}

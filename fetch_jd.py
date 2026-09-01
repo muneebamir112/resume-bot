@@ -183,6 +183,11 @@ def fetch(url):
                 print(f"  Fetch attempt {attempt}/{FETCH_RETRIES} failed ({e.__class__.__name__}), "
                       f"retrying in {FETCH_RETRY_DELAY}s...")
                 time.sleep(FETCH_RETRY_DELAY)
+        except requests.exceptions.HTTPError as e:
+            if e.response is not None and e.response.status_code in (404, 410):
+                print(f"Error: The job link appears to be expired ({e.response.status_code}).")
+                sys.exit(1)
+            raise
     raise last_err
 
 

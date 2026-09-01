@@ -16,8 +16,6 @@ from reportlab.platypus import (
     HRFlowable, ListFlowable, ListItem, Paragraph, SimpleDocTemplate, Spacer,
 )
 
-from .common import ADDRESS, EMAIL, EXPERIENCE, NAME, PHONE
-
 BLACK = colors.HexColor("#000000")
 GRAY = colors.HexColor("#555555")
 
@@ -81,17 +79,17 @@ def build(data: dict, output_path: str) -> str:
         output_path, pagesize=letter,
         topMargin=0.5 * inch, bottomMargin=0.5 * inch,
         leftMargin=0.65 * inch, rightMargin=0.65 * inch,
-        title=f"Jimmy Tran - {data.get('target_company', '')}",
+        title=f"{data.get('name', 'Candidate')} - {data.get('target_company', '')}",
     )
     styles = _styles()
     story = []
 
-    story.append(Paragraph(NAME, styles["name"]))
+    story.append(Paragraph(_esc(data.get("name", "")), styles["name"]))
     story.append(Paragraph(_esc(data["subtitle"]).upper(), styles["subtitle"]))
-    story.append(Paragraph(f"Email: {EMAIL}", styles["contact"]))
-    story.append(Paragraph(f"Phone: {PHONE}", styles["contact"]))
-    story.append(Paragraph(f"Address: {ADDRESS}", styles["contact"]))
-    story.append(Paragraph(f"Experience: {EXPERIENCE}", styles["contact"]))
+    story.append(Paragraph(f"Email: {_esc(data.get('email', ''))}", styles["contact"]))
+    story.append(Paragraph(f"Phone: {_esc(data.get('phone', ''))}", styles["contact"]))
+    story.append(Paragraph(f"Address: {_esc(data.get('address', ''))}", styles["contact"]))
+    story.append(Paragraph(f"Experience: {_esc(data.get('experience_summary', ''))}", styles["contact"]))
     story.append(Spacer(1, 4))
     story.append(HRFlowable(width="100%", thickness=1, color=BLACK, spaceAfter=6))
 
