@@ -28,7 +28,7 @@ import os
 import re
 import json
 import time
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs, urlencode
 import requests
 from bs4 import BeautifulSoup
 
@@ -57,6 +57,9 @@ MIN_TEXT_CHARS = 200
 # permanently lose a job — retry a few times with backoff before giving up.
 FETCH_RETRIES = 4
 FETCH_RETRY_DELAY = 5
+
+# Greenhouse public Jobs API — no auth required for published roles.
+GREENHOUSE_API = "https://boards-api.greenhouse.io/v1/boards/{board}/jobs/{job_id}"
 
 
 def slugify(text: str) -> str:
@@ -188,7 +191,7 @@ def fetch(url):
                 print(f"Error: The job link appears to be expired ({e.response.status_code}).")
                 sys.exit(1)
             raise
-    raise last_err
+    raise last_err  # type: ignore
 
 
 def fetch_rendered(url):
@@ -213,8 +216,149 @@ def fetch_rendered(url):
             browser.close()
 
 
+def _find_greenhouse_board_slug(html):
+    """Scan the raw HTML for a Greenhouse board slug embedded in any link or
+    script tag.  Handles two common patterns:
+      - boards.greenhouse.io/embed/job_board/js?for=<slug>  (script src param)
+      - boards.greenhouse.io/<slug>  (path-based embed URL)
+    Returns the slug string or None if not found.
+    """
+    # Pattern 1: ?for=<slug> query parameter in Greenhouse embed URLs
+    for m in re.finditer(
+        r'greenhouse\.io/[^"\']*[?&]for=([a-zA-Z0-9_-]+)', html, re.IGNORECASE
+    ):
+        slug = m.group(1)
+        if slug.lower() not in ("jobs", "v1", "v2", "embed"):
+            return slug
+
+    # Pattern 2: path-based  boards.greenhouse.io/<slug>/jobs or similar
+    for m in re.finditer(
+        r'greenhouse\.io/(?:embed/)?(?:v\d+/)?boards?/([a-zA-Z0-9_-]+)',
+        html, re.IGNORECASE
+    ):
+        slug = m.group(1)
+        if slug.lower() not in ("jobs", "v1", "v2", "embed"):
+            return slug
+
+    return None
+
+
+def fetch_greenhouse_api(url, html=None):
+    """If the URL contains a ?gh_jid=<id> parameter (Greenhouse embed),
+    attempt to fetch the job directly from the Greenhouse public API.
+
+    We need the board slug (e.g. 'triafederal') which is typically embedded
+    in the host page's HTML as a link to boards.greenhouse.io/<slug>.  If
+    html is provided we scan it first; otherwise we try a quick HTTP GET on
+    the original URL to grab the raw HTML for slug detection.
+
+    Returns (company, job_title, text) on success, or (None, None, None) if
+    the URL is not a Greenhouse embed or the API call fails.
+    """
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query)
+    job_id = (qs.get("gh_jid") or qs.get("gh_job_id") or [None])[0]
+    if not job_id:
+        return None, None, None
+
+    # --- find the board slug ---
+    slug = None
+    if html:
+        slug = _find_greenhouse_board_slug(html)
+
+    if not slug:
+        # Try a lightweight fetch of the host page just to discover the slug.
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=20)
+            if r.ok:
+                slug = _find_greenhouse_board_slug(r.text)
+        except Exception:
+            pass
+
+    if not slug:
+        # The Greenhouse widget may be loaded purely via JS (e.g. Webflow sites),
+        # so the board slug won't appear in the static HTML.  As a fallback we
+        # derive candidate slugs from the host domain and probe the Greenhouse
+        # jobs listing API until one returns a valid response.
+        host = re.sub(r"^www\.", "", parsed.netloc).lower()
+        domain_part = host.split(".")[0]   # e.g. "triafed" from "triafed.com"
+
+        # Build a ranked list of slug candidates to try.
+        candidates = []
+        # 1. domain stem as-is (e.g. "triafed")
+        candidates.append(domain_part)
+        # 2. domain stem without trailing digits (e.g. "company2" -> "company")
+        no_digits = re.sub(r"\d+$", "", domain_part)
+        if no_digits and no_digits != domain_part:
+            candidates.append(no_digits)
+        # 3. domain + "federal" / "inc" / "llc" common suffix combos
+        for suffix in ("federal", "inc", "corp", "group", "us", "global"):
+            candidates.append(domain_part + suffix)
+        # 4. Split on hyphens/underscores and try joined forms
+        parts = re.split(r"[-_]", domain_part)
+        if len(parts) > 1:
+            candidates.append("".join(parts))          # hyphen-removed
+            candidates.append(parts[0])                # first segment only
+
+        seen = set()
+        for candidate in candidates:
+            if candidate in seen or not candidate:
+                continue
+            seen.add(candidate)
+            probe_url = f"https://boards-api.greenhouse.io/v1/boards/{candidate}/jobs"
+            try:
+                pr = requests.get(probe_url, headers=HEADERS, timeout=10)
+                if pr.status_code == 200:
+                    slug = candidate
+                    print(f"  Greenhouse board slug probed: '{slug}'")
+                    break
+            except Exception:
+                pass
+
+    if not slug:
+        print("  Greenhouse embed detected but board slug could not be determined; "
+              "cannot use API shortcut.")
+        return None, None, None
+
+    api_url = GREENHOUSE_API.format(board=slug, job_id=job_id)
+    print(f"  Detected Greenhouse embed — fetching via API: {api_url}")
+    try:
+        resp = requests.get(api_url, headers=HEADERS, timeout=30)
+        if resp.status_code == 404:
+            print("  Greenhouse API returned 404 — job may be expired or board "
+                  "slug is wrong.")
+            return None, None, None
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"  Greenhouse API request failed: {e}")
+        return None, None, None
+
+    company = data.get("company_name") or None
+    # Newer API responses nest the company under 'company' key
+    if not company and isinstance(data.get("company"), dict):
+        company = data["company"].get("name")
+    job_title = data.get("title")
+    description_html = data.get("content") or ""
+    text = clean_lines(
+        BeautifulSoup(description_html, "html.parser").get_text("\n")
+    ) if description_html else ""
+
+    if not text:
+        return None, None, None
+
+    print(f"  Greenhouse API: {len(text)} chars extracted.")
+    return company, job_title, text
+
+
 def extract(html, url):
     soup = BeautifulSoup(html, "html.parser")
+
+    # --- Greenhouse embed shortcut (bypasses JS-rendered page) ---
+    gh_company, gh_title, gh_text = fetch_greenhouse_api(url, html=html)
+    if gh_text and len(gh_text) > MIN_TEXT_CHARS:
+        company = gh_company or extract_company_from_domain(url)
+        return company.strip(), gh_title, gh_text
 
     company, job_title, jsonld_text = extract_from_jsonld(BeautifulSoup(html, "html.parser"))
     page_title, page_text = extract_page_text(html)
@@ -240,8 +384,23 @@ def main():
     out_dir = os.path.dirname(os.path.abspath(__file__))
 
     print(f"Fetching: {url}")
-    html = fetch(url)
-    company, job_title, text = extract(html, url)
+    html = None
+    try:
+        html = fetch(url)
+    except Exception as e:
+        print(f"  Initial fetch failed ({e.__class__.__name__}: {e})")
+        print("  Will still attempt Greenhouse API or headless fallback if applicable.")
+
+    if html is not None:
+        company, job_title, text = extract(html, url)
+    else:
+        # fetch() failed entirely — try Greenhouse API directly (no html to scan,
+        # so fetch_greenhouse_api will attempt a fresh slug-discovery fetch).
+        company, job_title, text = fetch_greenhouse_api(url, html=None)
+        if not text:
+            text = ""
+        if not company:
+            company = extract_company_from_domain(url)
 
     if len(text) < MIN_TEXT_CHARS:
         print("Extracted text is very short - page likely renders its content "
@@ -271,6 +430,7 @@ def main():
         print(f"Job title: {job_title}")
     print(f"Saved: {out_path}")
     print(f"Extracted {len(text)} characters.")
+
 
 
 if __name__ == "__main__":

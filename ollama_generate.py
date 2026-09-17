@@ -263,14 +263,7 @@ def main():
     build_pdf(data, pdf_path)
     print(f"Saved resume: {pdf_path}")
 
-    # The JD text file has served its purpose now that the resume is
-    # generated - delete it so jd_*.txt files don't pile up indefinitely in
-    # this folder. Only reached on success (an exception earlier leaves the
-    # file in place, e.g. for retrying/debugging a failed generation).
-    try:
-        os.remove(jd_path)
-    except OSError as e:
-        print(f"  Could not delete {jd_path}: {e}")
+    # The JD text file is no longer deleted here; launcher.py handles cleanup.
 
 
 if __name__ == "__main__":
