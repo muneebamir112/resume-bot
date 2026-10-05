@@ -1,3 +1,9 @@
+import os
+import sys
+if not os.environ.get("JOBBOT_LAUNCHER_AUTH"):
+    import ctypes
+    ctypes.windll.user32.MessageBoxW(0, "Access Denied: This module must be run from the Job Bot Launcher.", "Security Alert", 0x10)
+    sys.exit(1)
 # -*- coding: utf-8 -*-
 """Fetch a job description AND the hiring company name from a URL, and save
 the JD as a plain-text file in the same format as the existing jd_*.txt

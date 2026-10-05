@@ -13,7 +13,20 @@ Usage:
 """
 
 import sys
+
 import os
+import sys
+if not os.environ.get("JOBBOT_LAUNCHER_AUTH"):
+    import ctypes
+    ctypes.windll.user32.MessageBoxW(0, "Access Denied: This module must be run from the Job Bot Launcher.", "Security Alert", 0x10)
+    sys.exit(1)
+import os
+import sys
+import os
+if getattr(sys, 'frozen', False):
+    CURRENT_DIR = os.path.dirname(sys.executable)
+else:
+    CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 import re
 import json
 import requests
@@ -162,7 +175,7 @@ These bullets were already used for a DIFFERENT company on this resume. Do not r
 """
 
     intern_note = ""
-    if "intern" in spec["seniority"].lower():
+    if "intern" in spec.get("seniority", "").lower():
         intern_note = 'This is an INTERNSHIP — the title must literally end in "Intern" (e.g. "Frontend Engineering Intern"), and bullets should read as junior/learning-focused, not senior ownership.'
 
     return f"""You are a resume-tailoring engine. Output ONLY valid JSON, no markdown fences, no commentary.
@@ -193,7 +206,7 @@ def main():
     with open(jd_path, encoding="utf-8") as f:
         jd_text = f.read()
 
-    profile_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles", f"{profile_name}.json")
+    profile_path = os.path.join(CURRENT_DIR, "profiles", f"{profile_name}.json")
     if not os.path.exists(profile_path):
         print(f"Error: Profile file not found: {profile_path}")
         sys.exit(1)
@@ -203,7 +216,7 @@ def main():
 
     print(f"Using local Ollama model '{model}' for {profile_name} — generating in pieces (this may take a few minutes on CPU).")
 
-    total_steps = 2 + len(profile_data["FIXED_EXPERIENCE"])
+    total_steps = 2 + len(profile_data.get("FIXED_EXPERIENCE", profile_data.get("work_experience", [])))
 
     print(f"  [1/{total_steps}] subtitle + summary...")
     summary_piece = generate_piece(build_summary_prompt(jd_text, profile_name, profile_data.get("experience_summary", "")), model, ["subtitle", "summary"])
@@ -215,7 +228,7 @@ def main():
 
     experience = []
     all_prior_bullets = []
-    for i, spec in enumerate(profile_data["FIXED_EXPERIENCE"], start=3):
+    for i, spec in enumerate(profile_data.get("FIXED_EXPERIENCE", profile_data.get("work_experience", [])), start=3):
         print(f"  [{i}/{total_steps}] {spec['company']} role...")
         role = generate_piece(build_role_prompt(jd_text, spec, all_prior_bullets, profile_name), model, ["title", "bullets"])
         all_prior_bullets.extend(role["bullets"])
@@ -245,7 +258,7 @@ def main():
         "keywords": overview["keywords"],
     }
 
-    out_dir = os.path.dirname(os.path.abspath(__file__))
+    out_dir = CURRENT_DIR
     data_dir = os.path.join(out_dir, "data")
     os.makedirs(data_dir, exist_ok=True)
     data_path = os.path.join(data_dir, f"{company.lower().replace(' ', '_')}_{profile_name.lower().replace(' ', '_')}_ollama.json")
