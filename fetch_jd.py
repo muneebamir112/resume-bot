@@ -387,7 +387,7 @@ def main():
         sys.exit(1)
 
     url = sys.argv[1]
-    out_dir = os.path.dirname(os.path.abspath(__file__))
+    out_dir = os.getcwd()
 
     print(f"Fetching: {url}")
     html = None
@@ -436,7 +436,6 @@ def main():
         print(f"Job title: {job_title}")
     print(f"Saved: {out_path}")
     print(f"Extracted {len(text)} characters.")
-
 
 
 if __name__ == "__main__":

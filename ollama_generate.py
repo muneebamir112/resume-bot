@@ -44,7 +44,7 @@ DEFAULT_MODEL = "qwen3:1.7b"
 # Rendered .docx resumes are saved here rather than inside the project
 # folder, so they're easy to find/attach to applications directly.
 import os as _os
-CVS_DIR = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "CVs")
+CVS_DIR = _os.getenv("RESUMES_SAVE_PATH", _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "CVs"))
 _os.makedirs(CVS_DIR, exist_ok=True)
 
 
@@ -208,7 +208,13 @@ def main():
     with open(jd_path, encoding="utf-8") as f:
         jd_text = f.read()
 
-    profile_path = os.path.join(CURRENT_DIR, "profiles", f"{profile_name}.json")
+    import re
+    def slugify(s):
+        s = s.lower().strip()
+        s = re.sub(r'[^a-z0-9]+', '-', s)
+        return s.strip('-')
+    parent_dir = os.path.dirname(CURRENT_DIR)
+    profile_path = os.path.join(parent_dir, "profiles", f"{slugify(profile_name)}.json")
     if not os.path.exists(profile_path):
         print(f"Error: Profile file not found: {profile_path}")
         sys.exit(1)
