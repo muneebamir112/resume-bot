@@ -43,7 +43,9 @@ DEFAULT_MODEL = "qwen3:1.7b"
 
 # Rendered .docx resumes are saved here rather than inside the project
 # folder, so they're easy to find/attach to applications directly.
-CVS_DIR = r"C:\Users\webNcodes\Desktop\CVs"
+import os as _os
+CVS_DIR = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "CVs")
+_os.makedirs(CVS_DIR, exist_ok=True)
 
 
 
@@ -180,9 +182,9 @@ These bullets were already used for a DIFFERENT company on this resume. Do not r
 
     return f"""You are a resume-tailoring engine. Output ONLY valid JSON, no markdown fences, no commentary.
 
-Write a resume work-experience entry for {profile_name} at a role that is {spec['seniority']}.
+Write a resume work-experience entry for {profile_name} at a role that is {spec.get('seniority', 'senior')}.
 The job title must be a variation of the JD's job title below, adjusted for this seniority level. {intern_note}
-Write exactly {spec['bullet_count']} bullet points. Each bullet must be 17-20 words, start with a strong action verb, mention a concrete technology from the JD, and where natural include a metric/outcome (e.g. "increased X by Y%"). Simple, professional, easy to read.
+Write exactly {spec.get('bullet_count', 5)} bullet points. Each bullet must be 17-20 words, start with a strong action verb, mention a concrete technology from the JD, and where natural include a metric/outcome (e.g. "increased X by Y%"). Simple, professional, easy to read.
 {avoid_block}
 JOB DESCRIPTION (use its responsibilities/technologies as the basis for these bullets):
 \"\"\"
@@ -190,7 +192,7 @@ JOB DESCRIPTION (use its responsibilities/technologies as the basis for these bu
 \"\"\"
 
 Output JSON with exactly these 2 keys:
-{{"title": "<job title>", "bullets": ["<bullet 1>", "... exactly {spec['bullet_count']} bullets total ..."]}}"""
+{{"title": "<job title>", "bullets": ["<bullet 1>", "... exactly {spec.get('bullet_count', 5)} bullets total ..."]}}"""
 
 
 def main():
@@ -241,7 +243,7 @@ def main():
         })
         n = len(role["bullets"])
         if n != spec["bullet_count"]:
-            print(f"    WARNING: got {n} bullets, expected {spec['bullet_count']}")
+            print(f"    WARNING: got {n} bullets, expected {spec.get('bullet_count', 5)}")
 
     data = {
         "target_company": company,
@@ -270,9 +272,8 @@ def main():
     # docx->PDF conversion (that needs Word/LibreOffice, neither of which
     # is installed here).
     from templates.pdf_template import build as build_pdf
-    company_dir = os.path.join(CVS_DIR, company)
-    os.makedirs(company_dir, exist_ok=True)
-    pdf_path = os.path.join(company_dir, f"{profile_name}.pdf")
+    os.makedirs(CVS_DIR, exist_ok=True)
+    pdf_path = os.path.join(CVS_DIR, f"{profile_name} - {company}.pdf")
     build_pdf(data, pdf_path)
     print(f"Saved resume: {pdf_path}")
 
