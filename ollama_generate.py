@@ -113,13 +113,13 @@ def _normalize_skills(skills):
 
 def generate_piece(prompt: str, model: str, required_keys: list, attempts: int = 4) -> dict:
     prompt_out = prompt.replace("\n", "\n[FILE_ONLY]")
-    print(f"[FILE_ONLY]--- PROMPT TO OLLAMA ---\n[FILE_ONLY]{prompt_out}\n[FILE_ONLY]------------------------")
+    print(f"[FILE_ONLY]--- PROMPT TO OLLAMA ---\n[FILE_ONLY]{prompt_out}\n[FILE_ONLY]------------------------", flush=True)
     last_err = None
     for i in range(1, attempts + 1):
         try:
             raw = call_ollama(prompt, model)
             raw_out = raw.replace("\n", "\n[FILE_ONLY]")
-            print(f"[FILE_ONLY]--- RESPONSE FROM OLLAMA (Attempt {i}) ---\n[FILE_ONLY]{raw_out}\n[FILE_ONLY]----------------------------------")
+            print(f"[FILE_ONLY]--- RESPONSE FROM OLLAMA (Attempt {i}) ---\n[FILE_ONLY]{raw_out}\n[FILE_ONLY]----------------------------------", flush=True)
             data = extract_json(raw)
             missing = [k for k in required_keys if k not in data]
             if missing:
@@ -221,14 +221,14 @@ def main():
     with open(profile_path, "r", encoding="utf-8") as f:
         profile_data = json.load(f)
 
-    print(f"Using local Ollama model '{model}' for {profile_name} — generating in pieces (this may take a few minutes on CPU).")
+    print(f"Using local Ollama model '{model}' for {profile_name} — generating in pieces (this may take 3-5 minutes on CPU. Please be patient!)...", flush=True)
 
     total_steps = 2 + len(profile_data.get("FIXED_EXPERIENCE", profile_data.get("work_experience", [])))
 
-    print(f"  [1/{total_steps}] subtitle + summary...")
+    print(f"  [1/{total_steps}] Generating subtitle + summary (Running inference, please wait...)", flush=True)
     summary_piece = generate_piece(build_summary_prompt(jd_text, profile_name, profile_data.get("experience_summary", "")), model, ["subtitle", "summary"])
 
-    print(f"  [2/{total_steps}] skills + keywords...")
+    print(f"  [2/{total_steps}] Generating skills + keywords (Running inference, please wait...)", flush=True)
     skills_piece = generate_piece(build_skills_prompt(jd_text, profile_name, profile_data.get("experience_summary", "")), model, ["skills", "keywords"])
 
     overview = {**summary_piece, **skills_piece}
@@ -236,7 +236,7 @@ def main():
     experience = []
     all_prior_bullets = []
     for i, spec in enumerate(profile_data.get("FIXED_EXPERIENCE", profile_data.get("work_experience", [])), start=3):
-        print(f"  [{i}/{total_steps}] {spec['company']} role...")
+        print(f"  [{i}/{total_steps}] Generating {spec['company']} role (Running inference, please wait...)", flush=True)
         role = generate_piece(build_role_prompt(jd_text, spec, all_prior_bullets, profile_name), model, ["title", "bullets"])
         all_prior_bullets.extend(role["bullets"])
         experience.append({
@@ -248,7 +248,7 @@ def main():
         })
         n = len(role["bullets"])
         if n != spec["bullet_count"]:
-            print(f"    WARNING: got {n} bullets, expected {spec.get('bullet_count', 5)}")
+            print(f"    WARNING: got {n} bullets, expected {spec.get('bullet_count', 5)}", flush=True)
 
     data = {
         "target_company": company,
