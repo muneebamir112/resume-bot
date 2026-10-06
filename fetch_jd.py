@@ -44,7 +44,7 @@ from bs4 import BeautifulSoup
 # failure even though the JD was already fetched and saved successfully.
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
-        _stream.reconfigure(encoding="utf-8", errors="replace")
+        _stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
 HEADERS = {
     "User-Agent": (

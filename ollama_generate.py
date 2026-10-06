@@ -36,7 +36,7 @@ import requests
 # UnicodeEncodeError.
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
-        _stream.reconfigure(encoding="utf-8", errors="replace")
+        _stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
 DEFAULT_MODEL = "qwen3:1.7b"
@@ -213,8 +213,7 @@ def main():
         s = s.lower().strip()
         s = re.sub(r'[^a-z0-9]+', '-', s)
         return s.strip('-')
-    parent_dir = os.path.dirname(CURRENT_DIR)
-    profile_path = os.path.join(parent_dir, "profiles", f"{slugify(profile_name)}.json")
+    profile_path = os.path.join(CURRENT_DIR, "profiles", f"{profile_name}.json")
     if not os.path.exists(profile_path):
         print(f"Error: Profile file not found: {profile_path}")
         sys.exit(1)
