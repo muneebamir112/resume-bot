@@ -30,7 +30,10 @@ DEFAULT_MODEL = "qwen3:1.7b"
 
 # Rendered .docx resumes are saved here rather than inside the project
 # folder, so they're easy to find/attach to applications directly.
-CVS_DIR = r"C:\Users\webNcodes\Desktop\CVs"
+CVS_DIR = os.getenv(
+    "RESUMES_SAVE_PATH",
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "CVs"),
+)
 
 
 
@@ -180,6 +183,15 @@ Output JSON with exactly these 2 keys:
 {{"title": "<job title>", "bullets": ["<bullet 1>", "... exactly {spec['bullet_count']} bullets total ..."]}}"""
 
 
+def trim_jd(text, limit=6000):
+    """Keep prompts short for the small local model: cut at a line break near the limit."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    brk = cut.rfind("\n")
+    return (cut[:brk] if brk > limit * 0.6 else cut).rstrip()
+
+
 def main():
     if len(sys.argv) < 4:
         print("Usage: python ollama_generate.py <jd_text_file> <Company Name> <Profile Name> [model]")
@@ -191,7 +203,7 @@ def main():
     model = sys.argv[4] if len(sys.argv) > 4 else DEFAULT_MODEL
 
     with open(jd_path, encoding="utf-8") as f:
-        jd_text = f.read()
+        jd_text = trim_jd(f.read())
 
     profile_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles", f"{profile_name}.json")
     if not os.path.exists(profile_path):
