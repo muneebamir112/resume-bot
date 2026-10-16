@@ -39,7 +39,7 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-DEFAULT_MODEL = "qwen3:1.7b"
+DEFAULT_MODEL = "qwen3.5:9b"
 
 # Rendered .docx resumes are saved here rather than inside the project
 # folder, so they're easy to find/attach to applications directly.
