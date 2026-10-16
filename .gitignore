@@ -1,2 +1,10 @@
 *.txt
 data/
+dist/
+build/
+*.spec
+__pycache__/
+.env
+service_account.json
+CVs/
+*.spec
