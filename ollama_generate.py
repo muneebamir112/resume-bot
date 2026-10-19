@@ -286,18 +286,27 @@ def main():
     # docx->PDF conversion (that needs Word/LibreOffice, neither of which
     # is installed here).
     from templates.pdf_template import build as build_pdf
-    os.makedirs(CVS_DIR, exist_ok=True)
-    pdf_path = os.path.join(CVS_DIR, f"{profile_name} - {company}.pdf")
-    build_pdf(data, pdf_path)
-    print(f"Saved resume: {pdf_path}")
+    # Save into profile-specific folder (e.g. CVs/Brian Moore/) and flat CVs/ for backward compatibility
+    profile_cv_dir = os.path.join(CVS_DIR, profile_name)
+    os.makedirs(profile_cv_dir, exist_ok=True)
+    pdf_path_nested = os.path.join(profile_cv_dir, f"{profile_name} - {company}.pdf")
+    pdf_path_flat = os.path.join(CVS_DIR, f"{profile_name} - {company}.pdf")
 
-    # Automatically upload to Google Drive if configured
+    build_pdf(data, pdf_path_nested)
+    try:
+        import shutil
+        shutil.copy2(pdf_path_nested, pdf_path_flat)
+    except Exception:
+        pass
+    print(f"Saved resume: {pdf_path_nested}")
+
+    # Automatically upload to Google Drive under the candidate's profile folder
     try:
         launcher_dir = os.path.join(os.path.dirname(CURRENT_DIR), "Job-bot-launcher")
         if launcher_dir not in sys.path:
             sys.path.append(launcher_dir)
         import google_drive_uploader
-        google_drive_uploader.upload_single_cv(pdf_path)
+        google_drive_uploader.upload_single_cv(pdf_path_nested, profile_name=profile_name)
     except Exception as drive_err:
         print(f"[Drive Warning] Could not upload to Google Drive: {drive_err}", flush=True)
 
