@@ -195,6 +195,15 @@ Output JSON with exactly these 2 keys:
 {{"title": "<job title>", "bullets": ["<bullet 1>", "... exactly {spec.get('bullet_count', 5)} bullets total ..."]}}"""
 
 
+def trim_jd(text, limit=6000):
+    """Keep prompts short for the small local model: cut at a line break near the limit."""
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    brk = cut.rfind("\n")
+    return (cut[:brk] if brk > limit * 0.6 else cut).rstrip()
+
+
 def main():
     if len(sys.argv) < 4:
         print("Usage: python ollama_generate.py <jd_text_file> <Company Name> <Profile Name> [model]")
@@ -206,7 +215,7 @@ def main():
     model = sys.argv[4] if len(sys.argv) > 4 else DEFAULT_MODEL
 
     with open(jd_path, encoding="utf-8") as f:
-        jd_text = f.read()
+        jd_text = trim_jd(f.read())
 
     import re
     def slugify(s):
