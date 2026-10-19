@@ -286,18 +286,12 @@ def main():
     # docx->PDF conversion (that needs Word/LibreOffice, neither of which
     # is installed here).
     from templates.pdf_template import build as build_pdf
-    # Save into profile-specific folder (e.g. CVs/Brian Moore/) and flat CVs/ for backward compatibility
+    # Save ONLY into profile-specific folder (e.g. CVs/Brian Moore/)
     profile_cv_dir = os.path.join(CVS_DIR, profile_name)
     os.makedirs(profile_cv_dir, exist_ok=True)
     pdf_path_nested = os.path.join(profile_cv_dir, f"{profile_name} - {company}.pdf")
-    pdf_path_flat = os.path.join(CVS_DIR, f"{profile_name} - {company}.pdf")
 
     build_pdf(data, pdf_path_nested)
-    try:
-        import shutil
-        shutil.copy2(pdf_path_nested, pdf_path_flat)
-    except Exception:
-        pass
     print(f"Saved resume: {pdf_path_nested}")
 
     # Automatically upload to Google Drive under the candidate's profile folder
