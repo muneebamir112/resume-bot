@@ -291,6 +291,16 @@ def main():
     build_pdf(data, pdf_path)
     print(f"Saved resume: {pdf_path}")
 
+    # Automatically upload to Google Drive if configured
+    try:
+        launcher_dir = os.path.join(os.path.dirname(CURRENT_DIR), "Job-bot-launcher")
+        if launcher_dir not in sys.path:
+            sys.path.append(launcher_dir)
+        import google_drive_uploader
+        google_drive_uploader.upload_single_cv(pdf_path)
+    except Exception as drive_err:
+        print(f"[Drive Warning] Could not upload to Google Drive: {drive_err}", flush=True)
+
     # The JD text file is no longer deleted here; launcher.py handles cleanup.
 
 
