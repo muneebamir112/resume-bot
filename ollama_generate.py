@@ -13,7 +13,20 @@ Usage:
 """
 
 import sys
+
 import os
+import sys
+if not os.environ.get("JOBBOT_LAUNCHER_AUTH"):
+    import ctypes
+    ctypes.windll.user32.MessageBoxW(0, "Access Denied: This module must be run from the Job Bot Launcher.", "Security Alert", 0x10)
+    sys.exit(1)
+import os
+import sys
+import os
+if getattr(sys, 'frozen', False):
+    CURRENT_DIR = os.path.dirname(sys.executable)
+else:
+    CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 import re
 import json
 import requests
@@ -23,17 +36,16 @@ import requests
 # UnicodeEncodeError.
 for _stream in (sys.stdout, sys.stderr):
     if hasattr(_stream, "reconfigure"):
-        _stream.reconfigure(encoding="utf-8", errors="replace")
+        _stream.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-DEFAULT_MODEL = "qwen3:1.7b"
+DEFAULT_MODEL = "qwen3.5:9b"
 
 # Rendered .docx resumes are saved here rather than inside the project
 # folder, so they're easy to find/attach to applications directly.
-CVS_DIR = os.getenv(
-    "RESUMES_SAVE_PATH",
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "CVs"),
-)
+import os as _os
+CVS_DIR = _os.getenv("RESUMES_SAVE_PATH", _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "CVs"))
+_os.makedirs(CVS_DIR, exist_ok=True)
 
 
 
@@ -101,13 +113,13 @@ def _normalize_skills(skills):
 
 def generate_piece(prompt: str, model: str, required_keys: list, attempts: int = 4) -> dict:
     prompt_out = prompt.replace("\n", "\n[FILE_ONLY]")
-    print(f"[FILE_ONLY]--- PROMPT TO OLLAMA ---\n[FILE_ONLY]{prompt_out}\n[FILE_ONLY]------------------------")
+    print(f"[FILE_ONLY]--- PROMPT TO OLLAMA ---\n[FILE_ONLY]{prompt_out}\n[FILE_ONLY]------------------------", flush=True)
     last_err = None
     for i in range(1, attempts + 1):
         try:
             raw = call_ollama(prompt, model)
             raw_out = raw.replace("\n", "\n[FILE_ONLY]")
-            print(f"[FILE_ONLY]--- RESPONSE FROM OLLAMA (Attempt {i}) ---\n[FILE_ONLY]{raw_out}\n[FILE_ONLY]----------------------------------")
+            print(f"[FILE_ONLY]--- RESPONSE FROM OLLAMA (Attempt {i}) ---\n[FILE_ONLY]{raw_out}\n[FILE_ONLY]----------------------------------", flush=True)
             data = extract_json(raw)
             missing = [k for k in required_keys if k not in data]
             if missing:
@@ -165,14 +177,14 @@ These bullets were already used for a DIFFERENT company on this resume. Do not r
 """
 
     intern_note = ""
-    if "intern" in spec["seniority"].lower():
+    if "intern" in spec.get("seniority", "").lower():
         intern_note = 'This is an INTERNSHIP — the title must literally end in "Intern" (e.g. "Frontend Engineering Intern"), and bullets should read as junior/learning-focused, not senior ownership.'
 
     return f"""You are a resume-tailoring engine. Output ONLY valid JSON, no markdown fences, no commentary.
 
-Write a resume work-experience entry for {profile_name} at a role that is {spec['seniority']}.
+Write a resume work-experience entry for {profile_name} at a role that is {spec.get('seniority', 'senior')}.
 The job title must be a variation of the JD's job title below, adjusted for this seniority level. {intern_note}
-Write exactly {spec['bullet_count']} bullet points. Each bullet must be 17-20 words, start with a strong action verb, mention a concrete technology from the JD, and where natural include a metric/outcome (e.g. "increased X by Y%"). Simple, professional, easy to read.
+Write exactly {spec.get('bullet_count', 5)} bullet points. Each bullet must be 17-20 words, start with a strong action verb, mention a concrete technology from the JD, and where natural include a metric/outcome (e.g. "increased X by Y%"). Simple, professional, easy to read.
 {avoid_block}
 JOB DESCRIPTION (use its responsibilities/technologies as the basis for these bullets):
 \"\"\"
@@ -180,7 +192,7 @@ JOB DESCRIPTION (use its responsibilities/technologies as the basis for these bu
 \"\"\"
 
 Output JSON with exactly these 2 keys:
-{{"title": "<job title>", "bullets": ["<bullet 1>", "... exactly {spec['bullet_count']} bullets total ..."]}}"""
+{{"title": "<job title>", "bullets": ["<bullet 1>", "... exactly {spec.get('bullet_count', 5)} bullets total ..."]}}"""
 
 
 def trim_jd(text, limit=6000):
@@ -205,7 +217,12 @@ def main():
     with open(jd_path, encoding="utf-8") as f:
         jd_text = trim_jd(f.read())
 
-    profile_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles", f"{profile_name}.json")
+    import re
+    def slugify(s):
+        s = s.lower().strip()
+        s = re.sub(r'[^a-z0-9]+', '-', s)
+        return s.strip('-')
+    profile_path = os.path.join(CURRENT_DIR, "profiles", f"{profile_name}.json")
     if not os.path.exists(profile_path):
         print(f"Error: Profile file not found: {profile_path}")
         sys.exit(1)
@@ -213,22 +230,22 @@ def main():
     with open(profile_path, "r", encoding="utf-8") as f:
         profile_data = json.load(f)
 
-    print(f"Using local Ollama model '{model}' for {profile_name} — generating in pieces (this may take a few minutes on CPU).")
+    print(f"Using local Ollama model '{model}' for {profile_name} — generating in pieces (this may take 3-5 minutes on CPU. Please be patient!)...", flush=True)
 
-    total_steps = 2 + len(profile_data["FIXED_EXPERIENCE"])
+    total_steps = 2 + len(profile_data.get("FIXED_EXPERIENCE", profile_data.get("work_experience", [])))
 
-    print(f"  [1/{total_steps}] subtitle + summary...")
+    print(f"  [1/{total_steps}] Generating subtitle + summary (Running inference, please wait...)", flush=True)
     summary_piece = generate_piece(build_summary_prompt(jd_text, profile_name, profile_data.get("experience_summary", "")), model, ["subtitle", "summary"])
 
-    print(f"  [2/{total_steps}] skills + keywords...")
+    print(f"  [2/{total_steps}] Generating skills + keywords (Running inference, please wait...)", flush=True)
     skills_piece = generate_piece(build_skills_prompt(jd_text, profile_name, profile_data.get("experience_summary", "")), model, ["skills", "keywords"])
 
     overview = {**summary_piece, **skills_piece}
 
     experience = []
     all_prior_bullets = []
-    for i, spec in enumerate(profile_data["FIXED_EXPERIENCE"], start=3):
-        print(f"  [{i}/{total_steps}] {spec['company']} role...")
+    for i, spec in enumerate(profile_data.get("FIXED_EXPERIENCE", profile_data.get("work_experience", [])), start=3):
+        print(f"  [{i}/{total_steps}] Generating {spec['company']} role (Running inference, please wait...)", flush=True)
         role = generate_piece(build_role_prompt(jd_text, spec, all_prior_bullets, profile_name), model, ["title", "bullets"])
         all_prior_bullets.extend(role["bullets"])
         experience.append({
@@ -240,7 +257,7 @@ def main():
         })
         n = len(role["bullets"])
         if n != spec["bullet_count"]:
-            print(f"    WARNING: got {n} bullets, expected {spec['bullet_count']}")
+            print(f"    WARNING: got {n} bullets, expected {spec.get('bullet_count', 5)}", flush=True)
 
     data = {
         "target_company": company,
@@ -257,7 +274,7 @@ def main():
         "keywords": overview["keywords"],
     }
 
-    out_dir = os.path.dirname(os.path.abspath(__file__))
+    out_dir = CURRENT_DIR
     data_dir = os.path.join(out_dir, "data")
     os.makedirs(data_dir, exist_ok=True)
     data_path = os.path.join(data_dir, f"{company.lower().replace(' ', '_')}_{profile_name.lower().replace(' ', '_')}_ollama.json")
@@ -269,20 +286,12 @@ def main():
     # docx->PDF conversion (that needs Word/LibreOffice, neither of which
     # is installed here).
     from templates.pdf_template import build as build_pdf
-    company_dir = os.path.join(CVS_DIR, company)
-    os.makedirs(company_dir, exist_ok=True)
-    pdf_path = os.path.join(company_dir, f"{profile_name}.pdf")
+    os.makedirs(CVS_DIR, exist_ok=True)
+    pdf_path = os.path.join(CVS_DIR, f"{profile_name} - {company}.pdf")
     build_pdf(data, pdf_path)
     print(f"Saved resume: {pdf_path}")
 
-    # The JD text file has served its purpose now that the resume is
-    # generated - delete it so jd_*.txt files don't pile up indefinitely in
-    # this folder. Only reached on success (an exception earlier leaves the
-    # file in place, e.g. for retrying/debugging a failed generation).
-    try:
-        os.remove(jd_path)
-    except OSError as e:
-        print(f"  Could not delete {jd_path}: {e}")
+    # The JD text file is no longer deleted here; launcher.py handles cleanup.
 
 
 if __name__ == "__main__":
