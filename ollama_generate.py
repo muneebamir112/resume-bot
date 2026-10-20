@@ -29,6 +29,8 @@ else:
     CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 import re
 import json
+import time
+import hashlib
 import requests
 
 # Windows' console defaults to a codepage (e.g. cp1252) that can't encode
@@ -63,7 +65,10 @@ def call_ollama(prompt: str, model: str) -> str:
             # call writing to the separate "thinking" field and leave
             # "response" empty, which looks like a JSON-parse failure here.
             "think": False,
-            "options": {"temperature": 0.3},
+            # num_ctx is pinned (the loaded model already uses 4096) so a
+            # different value on another call can't force a model reload or
+            # drop Ollama's saved reading of the shared prompt start.
+            "options": {"temperature": 0.3, "num_ctx": 4096},
         },
         # Ollama's server has occasionally wedged mid-request (accepts the
         # call but never generates - 0% CPU, no response) rather than
@@ -76,7 +81,18 @@ def call_ollama(prompt: str, model: str) -> str:
         timeout=300,
     )
     resp.raise_for_status()
-    return resp.json()["response"]
+    body = resp.json()
+    # Ollama reports how long it spent reading the prompt vs writing the
+    # answer (nanoseconds). A small read time on calls 2+ means the shared
+    # prompt start was reused; a full read every time means it wasn't.
+    print(
+        f"    [timing] read {body.get('prompt_eval_duration', 0) / 1e9:.1f}s "
+        f"({body.get('prompt_eval_count', 0)} tokens) | "
+        f"write {body.get('eval_duration', 0) / 1e9:.1f}s "
+        f"({body.get('eval_count', 0)} tokens)",
+        flush=True,
+    )
+    return body["response"]
 
 
 def extract_json(raw: str) -> dict:
@@ -135,36 +151,53 @@ def generate_piece(prompt: str, model: str, required_keys: list, attempts: int =
     raise RuntimeError(f"Gave up after {attempts} attempts: {last_err}")
 
 
-def build_summary_prompt(jd_text: str, profile_name: str, experience_summary: str) -> str:
+def shared_block(jd_text: str) -> str:
+    """The start of EVERY prompt: identical, character for character, in all 5
+    calls (and for every candidate on the same job). Ollama keeps what it just
+    read and skips re-reading any prompt start that matches the previous
+    request, so the long job description is only read once. Nothing that
+    changes between calls (candidate name, seniority, avoid-list...) may go
+    in here - it goes in the task part that follows."""
     return f"""You are a resume-tailoring engine. Output ONLY valid JSON, no markdown fences, no commentary.
 
-Analyze the job description below and produce these 2 fields for an {experience_summary} experienced candidate named {profile_name}:
+JOB DESCRIPTION:
+\"\"\"
+{jd_text}
+\"\"\"
+
+"""
+
+
+def build_summary_prompt(jd_text: str, profile_name: str, experience_summary: str) -> str:
+    return shared_block(jd_text) + f"""Analyze the job description above and produce these 2 fields for an {experience_summary} experienced candidate named {profile_name}:
 
 - "subtitle": "<Job Title Matching The JD> | <3-4 key skills from the JD separated by the bullet char •>"
 - "summary": a professional summary highlighting skills/tools/value proposition from the JD, professional and easy to read. Do NOT mention any company name in it. This MUST be a SINGLE JSON string value (not a list, not multiple keys) containing EXACTLY 5 sentences of 17-20 words each, written back-to-back in one paragraph.
 
-JOB DESCRIPTION:
-\"\"\"
-{jd_text}
-\"\"\"
-
 Output JSON with exactly these 2 keys: subtitle, summary. Nothing else."""
 
 
-def build_skills_prompt(jd_text: str, profile_name: str, experience_summary: str) -> str:
-    return f"""You are a resume-tailoring engine. Output ONLY valid JSON, no markdown fences, no commentary.
-
-Analyze the job description below and produce these 2 fields for an {experience_summary} experienced candidate named {profile_name}:
+def build_skills_prompt(jd_text: str) -> str:
+    # No candidate name / years here on purpose: the answer describes the JOB,
+    # so it is the same for every candidate and can be saved and reused (see
+    # load_job_skills / save_job_skills).
+    return shared_block(jd_text) + """Analyze the job description above and produce these 2 fields:
 
 - "skills": a JSON array of arrays, 6-9 categories, covering every programming language, framework, database, cloud service, tool, and testing framework mentioned or implied by the JD. Each inner array has EXACTLY 2 strings: [category, comma-separated-items]. Example of the full field: "skills": [["Languages & Frameworks", "JavaScript, TypeScript, React"], ["Cloud & DevOps", "AWS, Docker, CI/CD"]]
 - "keywords": one long comma-separated string of 30+ properly-capitalized ATS keywords pulled from the JD (e.g. "React, TypeScript, AWS", not "react, typescript, aws")
 
-JOB DESCRIPTION:
-\"\"\"
-{jd_text}
-\"\"\"
-
 Output JSON with exactly these 2 keys: skills, keywords. Nothing else."""
+
+
+# With the JD moved to the front (needed for prompt reuse), the small model wrote
+# noticeably shorter bullets (median 14 words instead of 17; 18% inside the
+# required 17-20 vs 40%). A reminder line or moving the rules did not help;
+# two example bullets of the right length did (33%, median 16). Generic on
+# purpose, and the prompt says not to copy them (none were copied in testing).
+LENGTH_EXAMPLES = (
+    "Led the migration of legacy services to a cloud platform using Java and Docker, cutting deployment time by 40%.",
+    "Built RESTful APIs in Python and AWS Lambda that handled high-volume requests reliably, reducing average response time by 35 percent.",
+)
 
 
 def build_role_prompt(jd_text: str, spec: dict, avoid_bullets: list, profile_name: str) -> str:
@@ -180,17 +213,13 @@ These bullets were already used for a DIFFERENT company on this resume. Do not r
     if "intern" in spec.get("seniority", "").lower():
         intern_note = 'This is an INTERNSHIP — the title must literally end in "Intern" (e.g. "Frontend Engineering Intern"), and bullets should read as junior/learning-focused, not senior ownership.'
 
-    return f"""You are a resume-tailoring engine. Output ONLY valid JSON, no markdown fences, no commentary.
-
-Write a resume work-experience entry for {profile_name} at a role that is {spec.get('seniority', 'senior')}.
-The job title must be a variation of the JD's job title below, adjusted for this seniority level. {intern_note}
-Write exactly {spec.get('bullet_count', 5)} bullet points. Each bullet must be 17-20 words, start with a strong action verb, mention a concrete technology from the JD, and where natural include a metric/outcome (e.g. "increased X by Y%"). Simple, professional, easy to read.
+    # Order matters: the avoid-list is different for every role, so it goes
+    # last (just before the output line) to keep it from breaking the shared
+    # start of the prompt.
+    return shared_block(jd_text) + f"""Write a resume work-experience entry for {profile_name} at a role that is {spec.get('seniority', 'senior')}.
+The job title must be a variation of the JD's job title above, adjusted for this seniority level. {intern_note}
+Write exactly {spec.get('bullet_count', 5)} bullet points. Each bullet must be 17-20 words, start with a strong action verb, mention a concrete technology from the JD, and where natural include a metric/outcome (e.g. "increased X by Y%"). Simple, professional, easy to read. Examples of the required length (19 and 20 words, do NOT copy them): "{LENGTH_EXAMPLES[0]}" "{LENGTH_EXAMPLES[1]}" Use the job description's responsibilities/technologies as the basis for these bullets.
 {avoid_block}
-JOB DESCRIPTION (use its responsibilities/technologies as the basis for these bullets):
-\"\"\"
-{jd_text}
-\"\"\"
-
 Output JSON with exactly these 2 keys:
 {{"title": "<job title>", "bullets": ["<bullet 1>", "... exactly {spec.get('bullet_count', 5)} bullets total ..."]}}"""
 
@@ -202,6 +231,109 @@ def trim_jd(text, limit=6000):
     cut = text[:limit]
     brk = cut.rfind("\n")
     return (cut[:brk] if brk > limit * 0.6 else cut).rstrip()
+
+
+# --- Skills + keywords are saved once per JOB ---------------------------------
+# They describe the job, not the candidate, so the 2nd/3rd candidate for the same
+# job reuses the file instead of asking the model again. The launcher starts a
+# new process per (job, candidate), so this has to be a file, not memory.
+# Bump PROMPT_VERSION whenever build_skills_prompt() changes, so old files stop
+# matching.
+PROMPT_VERSION = "skills-v1"
+JOB_CACHE_MAX_AGE_DAYS = 30
+
+
+def _job_cache_dir() -> str:
+    return os.path.join(CURRENT_DIR, "data", "job_cache")
+
+
+def _job_cache_path(jd_text: str, model: str) -> str:
+    key = hashlib.sha1(f"{PROMPT_VERSION}\0{model}\0{jd_text}".encode("utf-8")).hexdigest()[:20]
+    return os.path.join(_job_cache_dir(), f"{key}.json")
+
+
+def prune_job_cache() -> None:
+    """Delete saved skills older than JOB_CACHE_MAX_AGE_DAYS (also stray temp files)."""
+    cutoff = time.time() - JOB_CACHE_MAX_AGE_DAYS * 86400
+    try:
+        for name in os.listdir(_job_cache_dir()):
+            path = os.path.join(_job_cache_dir(), name)
+            if os.path.getmtime(path) < cutoff:
+                os.remove(path)
+    except OSError:
+        pass
+
+
+def load_job_skills(jd_text: str, model: str):
+    """Saved {"skills", "keywords"} for this job, or None. A missing, unreadable
+    or malformed file just counts as "not saved" - never an error."""
+    try:
+        with open(_job_cache_path(jd_text, model), encoding="utf-8") as f:
+            piece = json.load(f)
+        skills = _normalize_skills(piece["skills"])
+        keywords = piece["keywords"]
+        if skills and isinstance(keywords, str) and keywords.strip():
+            return {"skills": skills, "keywords": keywords}
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return None
+
+
+def save_job_skills(jd_text: str, model: str, piece: dict) -> None:
+    """Write via a temp file + os.replace so another panel running at the same
+    time can never read a half-written file. Failing to save is not fatal."""
+    path = _job_cache_path(jd_text, model)
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        os.makedirs(_job_cache_dir(), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"skills": piece["skills"], "keywords": piece["keywords"]}, f, ensure_ascii=False)
+        os.replace(tmp, path)
+    except OSError as e:
+        print(f"    (could not save skills for reuse: {e})", flush=True)
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+
+
+# --- Mechanical clean-ups done in code, not by the model ------------------------
+_LEGAL_SUFFIX = re.compile(r"[,\s]+(inc|llc|ltd|corp|corporation|co|company|gmbh|plc)\.?$", re.IGNORECASE)
+
+
+def strip_company_name(text: str, company: str) -> str:
+    """The prompt forbids naming the company in the summary but the model often
+    does anyway, so replace it with "the company" (keeps the sentence readable).
+    Multi-word names match any case; a one-word name must match as written, so
+    a company called e.g. "Extend" does not eat the ordinary verb "extend"."""
+    names = {company.strip()}
+    short = _LEGAL_SUFFIX.sub("", company.strip()).strip(" ,.")
+    if short:
+        names.add(short)
+    for name in sorted((n for n in names if n), key=len, reverse=True):
+        flags = re.IGNORECASE if " " in name else 0
+        pattern = re.compile(r"(?<!\w)" + re.escape(name) + r"(?P<poss>['’]s)?(?!\w)", flags)
+
+        def repl(m):
+            before = m.string[:m.start()].rstrip()
+            word = "The company" if (not before or before.endswith((".", "!", "?"))) else "the company"
+            return word + (m.group("poss") or "")
+
+        text = pattern.sub(repl, text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
+    return re.sub(r"\s+([,.;:])", r"\1", text).strip()
+
+
+def dedupe_csv(value: str) -> str:
+    """Drop repeated items from a comma-separated string (case-insensitive, first
+    spelling wins). Commas inside brackets, e.g. "AWS (EC2, S3)", are kept."""
+    seen, out = set(), []
+    for item in re.split(r",\s*(?![^()]*\))", value):
+        item = item.strip()
+        if item and item.lower() not in seen:
+            seen.add(item.lower())
+            out.append(item)
+    return ", ".join(out)
 
 
 def main():
@@ -216,6 +348,8 @@ def main():
 
     with open(jd_path, encoding="utf-8") as f:
         jd_text = trim_jd(f.read())
+
+    prune_job_cache()
 
     import re
     def slugify(s):
@@ -237,10 +371,20 @@ def main():
     print(f"  [1/{total_steps}] Generating subtitle + summary (Running inference, please wait...)", flush=True)
     summary_piece = generate_piece(build_summary_prompt(jd_text, profile_name, profile_data.get("experience_summary", "")), model, ["subtitle", "summary"])
 
-    print(f"  [2/{total_steps}] Generating skills + keywords (Running inference, please wait...)", flush=True)
-    skills_piece = generate_piece(build_skills_prompt(jd_text, profile_name, profile_data.get("experience_summary", "")), model, ["skills", "keywords"])
+    skills_piece = load_job_skills(jd_text, model)
+    if skills_piece:
+        print(f"  [2/{total_steps}] Using the skills + keywords already saved for this job (no model call)", flush=True)
+    else:
+        print(f"  [2/{total_steps}] Generating skills + keywords (Running inference, please wait...)", flush=True)
+        skills_piece = generate_piece(build_skills_prompt(jd_text), model, ["skills", "keywords"])
+        save_job_skills(jd_text, model, skills_piece)
 
     overview = {**summary_piece, **skills_piece}
+
+    # Code-side clean-ups (the model ignores these rules too often).
+    overview["summary"] = strip_company_name(overview["summary"], company)
+    overview["skills"] = [[label, dedupe_csv(items)] for label, items in overview["skills"]]
+    overview["keywords"] = dedupe_csv(overview["keywords"])
 
     experience = []
     all_prior_bullets = []
