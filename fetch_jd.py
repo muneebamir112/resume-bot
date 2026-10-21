@@ -200,6 +200,50 @@ def fetch(url):
     raise last_err  # type: ignore
 
 
+def dismiss_overlays(page):
+    """Dismiss common cookie consent dialogs, popups, and GDPR modals if present."""
+    dismiss_js = """() => {
+        const selectors = [
+            'button#onetrust-accept-btn-handler',
+            'button#onetrust-reject-all-handler',
+            'button.onetrust-close-btn-handler',
+            '#onetrust-banner-sdk button',
+            'button[id*="cookie" i]',
+            'button[class*="cookie" i]',
+            'button[aria-label*="cookie" i]',
+            'button[aria-label="Close" i]',
+            'button[aria-label="close" i]',
+            'button:has-text("Accept All")',
+            'button:has-text("Accept all")',
+            'button:has-text("Accept Cookies")',
+            'button:has-text("Accept cookies")',
+            'button:has-text("Allow All")',
+            'button:has-text("Allow Cookies")',
+            'button:has-text("I Agree")',
+            'button:has-text("I agree")',
+            'button:has-text("Got it")',
+            'button:has-text("Dismiss")',
+            'button:has-text("Close")',
+            '.modal-close',
+            '.popup-close'
+        ];
+        for (const s of selectors) {
+            try {
+                const btn = document.querySelector(s);
+                if (btn && btn.offsetParent !== null) {
+                    btn.click();
+                    return true;
+                }
+            } catch (e) {}
+        }
+        return false;
+    }"""
+    try:
+        page.evaluate(dismiss_js)
+    except Exception:
+        pass
+
+
 def fetch_rendered(url):
     """Fallback for JS-rendered job boards (Workday, some Greenhouse/Lever
     embeds): load the page in a real (headless) browser and return the
@@ -216,7 +260,9 @@ def fetch_rendered(url):
             # "domcontentloaded" is enough for the JS framework to have
             # mounted; the explicit wait below lets it finish painting.
             page.goto(url, timeout=45000, wait_until="domcontentloaded")
-            page.wait_for_timeout(5000)  # let JS render + late XHR content settle
+            page.wait_for_timeout(3000)  # let JS render + late XHR content settle
+            dismiss_overlays(page)
+            page.wait_for_timeout(1000)
             return page.content()
         finally:
             browser.close()
