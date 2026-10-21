@@ -4,7 +4,11 @@ dist/
 build/
 *.spec
 __pycache__/
-.env
 service_account.json
 CVs/
-*.spec
+.env
+.env.local
+.env.*
+Cover-Letters/
+credentials.json
+token.json
