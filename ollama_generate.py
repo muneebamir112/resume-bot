@@ -32,6 +32,11 @@ import json
 import time
 import hashlib
 import requests
+from dotenv import load_dotenv
+
+# Load environment variables (such as RESUMES_SAVE_PATH) from .env files
+load_dotenv(os.path.join(CURRENT_DIR, ".env"))
+load_dotenv(os.path.join(os.path.dirname(CURRENT_DIR), "Job-bot-launcher", ".env"))
 
 # Windows' console defaults to a codepage (e.g. cp1252) that can't encode
 # non-ASCII characters (e.g. Cyrillic) - without this, print() raises
@@ -43,8 +48,7 @@ for _stream in (sys.stdout, sys.stderr):
 OLLAMA_URL = "http://localhost:11434/api/generate"
 DEFAULT_MODEL = "qwen3.5:9b"
 
-# Rendered .docx resumes are saved here rather than inside the project
-# folder, so they're easy to find/attach to applications directly.
+# Rendered PDF resumes are saved here (or in RESUMES_SAVE_PATH configured by user)
 import os as _os
 CVS_DIR = _os.getenv("RESUMES_SAVE_PATH", _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "CVs"))
 _os.makedirs(CVS_DIR, exist_ok=True)
@@ -338,13 +342,14 @@ def dedupe_csv(value: str) -> str:
 
 def main():
     if len(sys.argv) < 4:
-        print("Usage: python ollama_generate.py <jd_text_file> <Company Name> <Profile Name> [model]")
+        print("Usage: python ollama_generate.py <jd_text_file> <Company Name> <Profile Name> [model] [job_title]")
         sys.exit(1)
 
     jd_path = sys.argv[1]
     company = sys.argv[2]
     profile_name = sys.argv[3]
-    model = sys.argv[4] if len(sys.argv) > 4 else DEFAULT_MODEL
+    model = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else DEFAULT_MODEL
+    job_title = sys.argv[5] if len(sys.argv) > 5 else ""
 
     with open(jd_path, encoding="utf-8") as f:
         jd_text = trim_jd(f.read())
@@ -430,10 +435,22 @@ def main():
     # docx->PDF conversion (that needs Word/LibreOffice, neither of which
     # is installed here).
     from templates.pdf_template import build as build_pdf
-    # Save ONLY into profile-specific folder (e.g. CVs/Brian Moore/)
+
+    def sanitize_filename(name: str) -> str:
+        s = re.sub(r'[<>:"/\\|?*\n\r\t]', '', str(name)).strip()
+        s = re.sub(r'\s+', ' ', s)
+        return s[:100].strip()
+
+    clean_comp = sanitize_filename(company) or "Company"
+    clean_title = sanitize_filename(job_title) if job_title else sanitize_filename(overview.get("subtitle", "Role"))
+    if not clean_title:
+        clean_title = "Role"
+
+    # Save into profile-specific folder (e.g. CVs/Brian Moore/) named as "Company Name - Job title.pdf"
     profile_cv_dir = os.path.join(CVS_DIR, profile_name)
     os.makedirs(profile_cv_dir, exist_ok=True)
-    pdf_path_nested = os.path.join(profile_cv_dir, f"{profile_name} - {company}.pdf")
+    pdf_filename = f"{clean_comp} - {clean_title}.pdf"
+    pdf_path_nested = os.path.join(profile_cv_dir, pdf_filename)
 
     build_pdf(data, pdf_path_nested)
     print(f"Saved resume: {pdf_path_nested}")
@@ -444,7 +461,11 @@ def main():
         if launcher_dir not in sys.path:
             sys.path.append(launcher_dir)
         import google_drive_uploader
-        google_drive_uploader.upload_single_cv(pdf_path_nested, profile_name=profile_name)
+        drive_res = google_drive_uploader.upload_single_cv(pdf_path_nested, profile_name=profile_name)
+        if drive_res:
+            link = drive_res.get("webViewLink") or (f"https://drive.google.com/file/d/{drive_res.get('id')}/view?usp=sharing" if drive_res.get('id') else "")
+            if link:
+                print(f"[Drive URL] {link}", flush=True)
     except Exception as drive_err:
         print(f"[Drive Warning] Could not upload to Google Drive: {drive_err}", flush=True)
 

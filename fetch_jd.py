@@ -168,10 +168,79 @@ def extract_company_from_domain(url):
     return host
 
 
+COOKIE_PATTERNS = [
+    re.compile(r"we use cookies", re.IGNORECASE),
+    re.compile(r"cookie policy", re.IGNORECASE),
+    re.compile(r"cookie preferences", re.IGNORECASE),
+    re.compile(r"accept all cookies", re.IGNORECASE),
+    re.compile(r"accept cookies", re.IGNORECASE),
+    re.compile(r"allow all cookies", re.IGNORECASE),
+    re.compile(r"allow cookies", re.IGNORECASE),
+    re.compile(r"strictly necessary cookies", re.IGNORECASE),
+    re.compile(r"performance cookies", re.IGNORECASE),
+    re.compile(r"targeting cookies", re.IGNORECASE),
+    re.compile(r"functional cookies", re.IGNORECASE),
+    re.compile(r"by clicking [\"']?accept[\"']?", re.IGNORECASE),
+    re.compile(r"privacy policy.*cookies", re.IGNORECASE),
+    re.compile(r"manage preferences", re.IGNORECASE),
+    re.compile(r"consent to the use of cookies", re.IGNORECASE),
+    re.compile(r"store and/or access information on a device", re.IGNORECASE),
+]
+
+JOB_SIGNALS = [
+    re.compile(r"requirements?", re.IGNORECASE),
+    re.compile(r"responsibilities", re.IGNORECASE),
+    re.compile(r"qualifications?", re.IGNORECASE),
+    re.compile(r"experience", re.IGNORECASE),
+    re.compile(r"about the role", re.IGNORECASE),
+    re.compile(r"about the job", re.IGNORECASE),
+    re.compile(r"what you(?:'ll| will) do", re.IGNORECASE),
+    re.compile(r"what we(?:'re| are) looking for", re.IGNORECASE),
+    re.compile(r"skills?", re.IGNORECASE),
+    re.compile(r"salary", re.IGNORECASE),
+    re.compile(r"benefits?", re.IGNORECASE),
+]
+
+
+def looks_like_cookie_banner(text: str) -> bool:
+    """Returns True if the text is predominantly a cookie/GDPR consent notice."""
+    t = text.strip() if text else ""
+    if not t:
+        return False
+    cookie_matches = sum(1 for p in COOKIE_PATTERNS if p.search(t))
+    job_matches = sum(1 for p in JOB_SIGNALS if p.search(t))
+    if cookie_matches >= 2 and job_matches == 0:
+        return True
+    if cookie_matches >= 3 and job_matches <= 1:
+        return True
+    if len(t) < 800 and ("cookie" in t.lower() or "consent" in t.lower()) and job_matches == 0:
+        return True
+    if t.lower().startswith("we use cookies") and job_matches == 0:
+        return True
+    return False
+
+
 def extract_page_text(html):
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(STRIP_TAGS):
         tag.decompose()
+
+    # Decompose common cookie and consent overlay elements from static HTML
+    cookie_selectors = [
+        "#onetrust-consent-sdk", "#onetrust-banner-sdk", "#CybotCookiebotDialog",
+        ".osano-cm-window", ".didomi-popup-container", ".cky-consent-container",
+        "[class*='cookie-banner' i]", "[id*='cookie-banner' i]",
+        "[class*='cookie-notice' i]", "[id*='cookie-notice' i]",
+        "[class*='cookie-consent' i]", "[id*='cookie-consent' i]",
+        "[class*='consent-banner' i]", "[id*='consent-banner' i]",
+    ]
+    for sel in cookie_selectors:
+        try:
+            for el in soup.select(sel):
+                el.decompose()
+        except Exception:
+            pass
+
     title = soup.title.string.strip() if soup.title and soup.title.string else ""
     return title, clean_lines(soup.get_text("\n"))
 
@@ -202,46 +271,149 @@ def fetch(url):
 
 def dismiss_overlays(page):
     """Dismiss common cookie consent dialogs, popups, and GDPR modals if present."""
-    dismiss_js = """() => {
+    dismiss_js = r"""() => {
+        let dismissed = false;
         const selectors = [
+            '#onetrust-accept-btn-handler',
+            '#onetrust-pc-btn-handler',
             'button#onetrust-accept-btn-handler',
-            'button#onetrust-reject-all-handler',
-            'button.onetrust-close-btn-handler',
+            '.onetrust-close-btn-handler',
             '#onetrust-banner-sdk button',
-            'button[id*="cookie" i]',
-            'button[class*="cookie" i]',
-            'button[aria-label*="cookie" i]',
-            'button[aria-label="Close" i]',
-            'button[aria-label="close" i]',
-            'button:has-text("Accept All")',
-            'button:has-text("Accept all")',
-            'button:has-text("Accept Cookies")',
-            'button:has-text("Accept cookies")',
-            'button:has-text("Allow All")',
-            'button:has-text("Allow Cookies")',
-            'button:has-text("I Agree")',
-            'button:has-text("I agree")',
-            'button:has-text("Got it")',
-            'button:has-text("Dismiss")',
-            'button:has-text("Close")',
-            '.modal-close',
-            '.popup-close'
+            '#CybotCookiebotDialogBodyLevelButtonLevelOptinAllowAll',
+            '#CybotCookiebotDialogBodyButtonAccept',
+            '#CybotCookiebotDialogBodyLevelButtonAccept',
+            '#didomi-notice-agree-button',
+            '.osano-cm-accept-all',
+            '.osano-cm-button--type_save',
+            '#truste-consent-button',
+            '.trustarc-agree-btn',
+            '[data-testid="uc-accept-all-button"]',
+            '#axeptio_btn_acceptAll',
+            'button.cm-btn-success',
+            'button.cm-btn-accept',
+            'button.cky-btn-accept',
+            '.cc-btn.cc-allow',
+            '.cc-btn.cc-dismiss',
+            '[data-cookiebanner="accept_button"]',
+            '.iubenda-cs-accept-btn',
+            'button[id*="cookie-accept" i]',
+            'button[id*="accept-cookie" i]',
+            'button[class*="cookie-accept" i]',
+            'button[class*="accept-cookie" i]',
+            'button[id*="accept-all" i]',
+            'button[class*="accept-all" i]'
         ];
         for (const s of selectors) {
             try {
-                const btn = document.querySelector(s);
-                if (btn && btn.offsetParent !== null) {
-                    btn.click();
-                    return true;
+                const el = document.querySelector(s);
+                if (el && (el.offsetParent !== null || el.getBoundingClientRect().height > 0)) {
+                    el.click();
+                    dismissed = true;
+                    break;
                 }
             } catch (e) {}
         }
-        return false;
+
+        if (!dismissed) {
+            const acceptRegex = /^(accept\s+all\s+cookies|accept\s+all|accept\s+cookies|allow\s+all\s+cookies|allow\s+all|allow\s+cookies|i\s+accept|i\s+agree|agree\s+&\s+close|agree\s+and\s+continue|accept\s+and\s+proceed|accept\s+&\s+continue|accept\s+recommended|agree|got\s+it|dismiss|ok)$/i;
+            const acceptSubRegex = /(accept\s+(all\s+)?cookies|allow\s+(all\s+)?cookies|accept\s+all|allow\s+all|agree\s+to\s+all|accept\s+recommended)/i;
+            const candidates = Array.from(document.querySelectorAll('button, a[role="button"], a.btn, [role="button"], input[type="button"], input[type="submit"]'));
+            for (const el of candidates) {
+                try {
+                    const text = (el.innerText || el.textContent || el.value || el.getAttribute('aria-label') || '').trim();
+                    if (!text || text.length > 50) continue;
+                    if (acceptRegex.test(text) || acceptSubRegex.test(text)) {
+                        if (el.offsetParent !== null || el.getBoundingClientRect().height > 0) {
+                            el.click();
+                            dismissed = true;
+                            break;
+                        }
+                    }
+                } catch (e) {}
+            }
+        }
+
+        // Check shadow roots
+        if (!dismissed) {
+            try {
+                for (const host of document.querySelectorAll('*')) {
+                    if (host.shadowRoot) {
+                        const btn = host.shadowRoot.querySelector('button[data-testid="uc-accept-all-button"], button#accept, button.accept, [data-testid="uc-accept-all-button"]');
+                        if (btn) {
+                            btn.click();
+                            dismissed = true;
+                            break;
+                        }
+                    }
+                }
+            } catch (e) {}
+        }
+
+        // Force remove persistent overlays/backdrops so they don't cover the real description
+        const bannerSelectors = [
+            '#onetrust-consent-sdk',
+            '#onetrust-banner-sdk',
+            '#CybotCookiebotDialog',
+            '.osano-cm-window',
+            '.didomi-popup-container',
+            '[id*="cookie-banner" i]',
+            '[class*="cookie-banner" i]',
+            '[id*="cookie-notice" i]',
+            '[class*="cookie-notice" i]',
+            '[id*="cookie-consent" i]',
+            '[class*="cookie-consent" i]',
+            '[id*="consent-banner" i]',
+            '[class*="consent-banner" i]',
+            '.cky-consent-container'
+        ];
+        for (const bSel of bannerSelectors) {
+            try {
+                document.querySelectorAll(bSel).forEach(bEl => {
+                    bEl.remove();
+                    dismissed = true;
+                });
+            } catch (e) {}
+        }
+
+        try {
+            if (document.body) {
+                document.body.style.overflow = 'auto';
+                document.body.classList.remove('modal-open', 'no-scroll', 'ot-modal-open');
+            }
+            if (document.documentElement) {
+                document.documentElement.style.overflow = 'auto';
+            }
+        } catch (e) {}
+
+        return dismissed;
     }"""
     try:
         page.evaluate(dismiss_js)
     except Exception:
         pass
+
+    pw_selectors = [
+        "button:has-text('Accept all cookies')",
+        "button:has-text('Accept All Cookies')",
+        "button:has-text('Accept all')",
+        "button:has-text('Accept All')",
+        "button:has-text('Accept Cookies')",
+        "button:has-text('Allow all cookies')",
+        "button:has-text('Allow All')",
+        "button:has-text('I Agree')",
+        "button:has-text('I agree')",
+        "button:has-text('Got it')",
+        "button:has-text('Dismiss')",
+    ]
+    for sel in pw_selectors:
+        try:
+            loc = page.locator(sel).first
+            if loc.is_visible(timeout=400):
+                loc.click(timeout=1000)
+                time.sleep(0.5)
+                break
+        except Exception:
+            pass
 
 
 def fetch_rendered(url):
@@ -422,7 +594,12 @@ def extract(html, url):
     if not company:
         company = extract_company_from_domain(url)
 
-    text = jsonld_text if jsonld_text and len(jsonld_text) > 200 else page_text
+    if jsonld_text and len(jsonld_text) > 200 and not looks_like_cookie_banner(jsonld_text):
+        text = jsonld_text
+    elif not looks_like_cookie_banner(page_text):
+        text = page_text
+    else:
+        text = ""
 
     return company.strip(), job_title, text
 
@@ -454,20 +631,21 @@ def main():
         if not company:
             company = extract_company_from_domain(url)
 
-    if len(text) < MIN_TEXT_CHARS:
-        print("Extracted text is very short - page likely renders its content "
-              "via JavaScript. Retrying with a headless browser...")
+    if len(text) < MIN_TEXT_CHARS or looks_like_cookie_banner(text):
+        print("Extracted text is very short or looks like a cookie banner - retrying with headless browser...")
         try:
             html = fetch_rendered(url)
             company2, job_title2, text2 = extract(html, url)
-            if len(text2) > len(text):
+            if len(text2) > len(text) and not looks_like_cookie_banner(text2):
+                company, job_title, text = company2, job_title2, text2
+            elif not looks_like_cookie_banner(text2) and len(text2) >= MIN_TEXT_CHARS:
                 company, job_title, text = company2, job_title2, text2
         except Exception as e:
             print(f"Headless-browser retry failed: {e}")
 
-    if len(text) < MIN_TEXT_CHARS:
-        print("WARNING: extracted text is still very short after the headless-"
-              "browser retry - the JD may be behind a login/consent wall. "
+    if len(text) < MIN_TEXT_CHARS or looks_like_cookie_banner(text):
+        print("WARNING: extracted text is still very short or looks like a cookie banner "
+              "after the headless-browser retry - the JD may be behind a login/consent wall. "
               "Consider pasting the JD manually instead.")
 
     name = sys.argv[2] if len(sys.argv) == 3 else company
